@@ -1,0 +1,35 @@
+#!/bin/sh
+#info: openbox startup configuration for kiosk mode
+# install to: /etc/xdg/openbox/autostart
+
+# background color
+hsetroot -solid "#ffffff" &
+
+SYSTEM_IS_VM=$(hostnamectl status | grep Virt)
+if [ -n "${SYSTEM_IS_VM}" ]; then
+    # change resolution if this is a VM
+    xrandr -s 1280x720
+else
+    # fix screen tearing on real hardware by using OpenGL
+    picom --backend glx --vsync &
+fi
+
+# disable power saving behaviour of monitor
+xset -dpms
+# disable screen saver
+xset s off
+# disable blanking of the video device
+xset s noblank
+
+# set wallpaper
+BG_IMAGE="$HOME/.autokiosk.png"
+if ! [ -f "$BG_IMAGE" ]; then
+    ln -s "/usr/local/share/autokiosk/autokiosk.png" "$BG_IMAGE"
+fi
+feh --bg-scale "$BG_IMAGE"
+
+# enable auto hide mouse
+unclutter &
+
+# user startup script
+sh "$HOME/.autokiosk_logon"

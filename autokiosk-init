@@ -1,0 +1,58 @@
+#!/bin/sh
+#info: Configure openbox for kiosk mode, autologin user
+
+# must run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo 'This script must be run as root!' >&2
+    exit 1
+fi
+
+TARGET_USER="$1"
+
+if [ -z "$TARGET_USER" ]; then
+    echo "Missing variable TARGET_USER"
+    exit 1
+fi
+
+# variables
+DIR_CFG="/etc/xdg/openbox"
+AUTOSTART="$DIR_CFG/autostart"
+AUTOSTART_KIOSK="/usr/local/share/autokiosk/openbox-autostart"
+RC="$DIR_CFG/rc.xml"
+RC_KIOSK="/usr/local/share/autokiosk/openbox-rc.xml"
+
+# verify
+if ! [ -d "$DIR_CFG" ]; then
+    echo "ERROR: openbox does not seem to be installed"
+    exit 1
+fi
+
+# custom autostart file
+cp -f "$AUTOSTART_KIOSK" "$AUTOSTART" || exit 1
+chmod 755 "$AUTOSTART" || exit 1
+
+# custom desktop settings
+cp -f "$RC_KIOSK" "$RC" || exit 1
+chmod 644 "$RC" || exit 1
+
+# autologin current user
+CFG_LIGHTDM="/etc/lightdm/lightdm.conf"
+if ! [ -f "$CFG_LIGHTDM" ]; then
+    echo "ERROR: lightdm does not seem to be installed"
+    exit 1
+fi
+# autologin user
+sed -i "/autologin-user=/c\autologin-user=$TARGET_USER" "$CFG_LIGHTDM" ||
+    exit 1
+sed -i "/autologin-user-timeout=/c\autologin-user-timeout=0" "$CFG_LIGHTDM" ||
+    exit 1
+
+# restart desktop
+# shellcheck disable=SC2009
+if ps a | grep -v grep | grep -q Xorg; then
+    service lightdm stop || exit 1
+    sleep 1 # otherwise framebuffer might not be cleared
+    service lightdm start || exit 1
+else
+    echo "WARNING: There is no Xorg session currently running. Try reboot."
+fi

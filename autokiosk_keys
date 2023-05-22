@@ -1,0 +1,22 @@
+#!/bin/sh
+#info: Default file to execute when pressing function keys in openbox and
+# Copy this file to $HOME/.autokiosk_keys to override default settings
+
+if [ -f "$HOME/.autokiosk_keys" ]; then
+    sh -c "$HOME/.autokiosk_keys $1"
+else
+    case $1 in
+    F9)
+        xterm
+        ;;
+    F10)
+        xterm
+        ;;
+    F11)
+        xterm
+        ;;
+    F12)
+        xterm
+        ;;
+    esac
+fi

@@ -1,0 +1,174 @@
+#!/bin/sh
+# shellcheck disable=SC2039
+
+# help
+if [ -z "$1" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    man autokiosk.1 || ronn -r <README.md | man -l -
+    exit
+fi
+
+# must run as normal user
+if [ "$(id -u)" = 0 ]; then
+    echo 'This script must be run as a normal user, not root!' >&2
+    exit 1
+fi
+
+LOG="$HOME/.autokiosk.log"
+LOG_ERR="$HOME/.autokiosk_error.log"
+rm -f "$LOG" "$LOG_ERR"
+
+TARGET="$1"
+ACTION="$2"
+
+if [ "$TARGET" = "close-all" ]; then
+    ACTION="close-all"
+fi
+
+error() {
+    echo "ERROR: $1" | tee -a "$LOG"
+    exit 1
+}
+
+# default settings
+if [ -z "$TARGET" ]; then
+    if [ -d /var/www/html ]; then
+        TARGET="http://localhost/"
+    else
+        TARGET="http://example.com/"
+    fi
+fi
+
+DATE=$(date)
+echo "TARGET: $TARGET ACTION: $ACTION - $DATE" >>"$LOG"
+
+# default display fallback
+if [ -z "$DISPLAY" ]; then
+    # required if run from terminal
+    export DISPLAY=:0 1>>"$LOG" 2>>"$LOG_ERR"
+    # required for systemd to run as service
+    echo "Running autokiosk in none-interactive mode"
+    xhost +local: 1>>"$LOG" 2>>"$LOG_ERR"
+fi
+
+# wait for an openbox session
+if ! w | grep -qF openbox; then
+    echo "no openbox session found"
+fi
+
+abort_if_running() {
+    # shellcheck disable=SC2009
+    RUNNING_INSTANCES=$(ps -eo args | grep -v grep |
+        grep -F "$1" | grep -F "$2")
+    if [ -n "$RUNNING_INSTANCES" ]; then
+        echo "Already running: $1 $2"
+        exit 1
+    fi
+}
+
+open_http() {
+    echo "Open URL $TARGET"
+
+    # default kiosk application
+    if command -v simple-kiosk 1>/dev/null; then
+        abort_if_running simple-kiosk "$TARGET"
+        nohup simple-kiosk "$TARGET" >/dev/null 2>&1 &
+    # Chromium fallback
+    # only use as last resort,
+    # Chromium can be unstable on ARM and has hardcoded keyboard controls
+    elif command -v chromium 1>/dev/null; then
+        # find desktop resolution of first monitor
+        # shellcheck disable=SC2063
+        RES=$(xrandr | grep '*' | head -n1 | awk '{print $1}' | tr 'x' ',')
+        if [ -z "$RES" ]; then
+            error "Failed to find desktop resolution"
+        fi
+        abort_if_running chromium "$TARGET"
+        nohup chromium "$TARGET" \
+            --window-size="$RES" \
+            --start-fullscreen \
+            --kiosk \
+            --incognito \
+            --noerrdialogs \
+            --disable-translate \
+            --no-first-run \
+            --fast \
+            --fast-start \
+            --disable-infobars \
+            --disable-features=TranslateUI \
+            --disk-cache-dir=/dev/null \
+            --password-store=basic >/dev/null 2>&1 &
+    else
+        error "Failed to find simple-kiosk or chromium"
+    fi
+}
+
+open_vm() {
+    echo "Open VM $TARGET"
+
+    if [ -z "$(command -v virt-viewer)" ]; then
+        error "Failed to find virt-viewer"
+    fi
+
+    # set default URI
+    if [ -z "$LIBVIRT_DEFAULT_URI" ]; then
+        export LIBVIRT_DEFAULT_URI="qemu:///system"
+    fi
+
+    # verify
+    if [ -z "$LIBVIRT_DEFAULT_URI" ]; then
+        error "LIBVIRT_DEFAULT_URI is unset"
+    fi
+    if [ -z "$DISPLAY" ]; then
+        error "DISPLAY is unset"
+    fi
+
+    # shellcheck disable=SC2129
+    echo "LIBVIRT_DEFAULT_URI $LIBVIRT_DEFAULT_URI" >>"$LOG"
+    echo "DISPLAY $DISPLAY" >>"$LOG"
+    echo "HOME $HOME" >>"$LOG"
+
+    # open VM in fullscreen
+    abort_if_running virt-viewer "$TARGET"
+    nohup virt-viewer -v "$TARGET" --reconnect --wait --kiosk 1>>"$LOG" 2>&1 &
+}
+
+close_process() {
+    # shellcheck disable=SC2009
+    PROCESS_ID="$(ps ax | grep -iF "$1" | grep -iF "$2" | awk '{print $1}')"
+    if [ -n "$PROCESS_ID" ]; then
+        for i in $PROCESS_ID; do
+            CMD_LINE=$(ps -p "$i" -o args --no-headers)
+            kill "$i" 2>/dev/null && echo "> TERM process: $CMD_LINE" |
+                tee "$LOG"
+        done
+    fi
+}
+
+case $ACTION in
+close-all)
+    close_process simple-kiosk "http"
+    close_process chromium ""
+    close_process virt-viewer ""
+    exit 0
+    ;;
+close)
+    echo "Stop $TARGET"
+    if echo "$TARGET" | grep -q '^http'; then
+        if command -v simple-kiosk 1>/dev/null; then
+            close_process simple-kiosk "$TARGET"
+        else
+            close_process chromium "$TARGET"
+        fi
+    else
+        close_process virt-viewer "$TARGET"
+    fi
+    ;;
+*)
+    # open target
+    if echo "$TARGET" | grep -q '^http'; then
+        open_http
+    else
+        open_vm
+    fi
+    ;;
+esac
