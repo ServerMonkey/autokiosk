@@ -1,4 +1,4 @@
-cinac-kiosk(1) -- openbox kiosk starter for libvirt and web
+autokiosk(1) -- openbox kiosk starter for libvirt and web
 =============================================
 
 ## DESCRIPTION
@@ -46,5 +46,4 @@ See license file
 
 ## SEE ALSO
 
-cinac(1), openbox(1), simple-kiosk(1), chromium(1), virt-viewer(1)
-
+openbox(1), simple-kiosk(1), chromium(1), virt-viewer(1)
