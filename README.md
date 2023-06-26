@@ -12,14 +12,16 @@ Syntax:
 
 `autokiosk -h, --help`
 
-`autokiosk [<URL>|<LIBVIRT_DOMAIN>] [close|close-all]`
+`autokiosk [<URL>|<LIBVIRT_DOMAIN>|close-all|hide-all|hide-vms] [close|hide]`
 
 * Will only open one instance of the URL or libvirt domain
-* If no URI is passed, autokiosk will open http://example.com/
-* If no URI is passed and the folder /var/www/html exists, autokiosk will
-  open http://localhost/
-* close-all will close all simple-kiosk, chromium and virt-viewer processes
 * Best used with openbox
+
+* `close` will close a specific processes
+* `hide` will minimize a specific processes
+* `close-all` will close all simple-kiosk, chromium and virt-viewer processes
+* `hide-all` will minimize all simple-kiosk, chromium and virt-viewer processes
+* `hide-vms` will minimize all virt-viewer processes
 
 ## EXAMPLE
 
@@ -39,6 +41,14 @@ Close the just opened kiosk windows
 Quit every simple-kiosk, Chromium and virt-viewer process:
 
     $ autokiosk close-all
+
+Minimize the virt-viewer process with the title 'my.domain':
+
+    $ autokiosk my.domain hide
+
+Minimize all virt-viewer processes:
+
+    $ autokiosk hide-all
 
 ## COPYRIGHT
 

@@ -20,6 +20,8 @@ AUTOSTART="$DIR_CFG/autostart"
 AUTOSTART_KIOSK="/usr/local/share/autokiosk/openbox-autostart"
 RC="$DIR_CFG/rc.xml"
 RC_KIOSK="/usr/local/share/autokiosk/openbox-rc.xml"
+TINT_THEME="/usr/local/share/autokiosk/tint2rc"
+TINT_THEME_KISOK="/etc/xdg/tint2/tint2rc"
 
 # verify
 if ! [ -d "$DIR_CFG" ]; then
@@ -35,6 +37,10 @@ chmod 755 "$AUTOSTART" || exit 1
 cp -f "$RC_KIOSK" "$RC" || exit 1
 chmod 644 "$RC" || exit 1
 
+# custom tint2 panel theme
+cp -f "$TINT_THEME" "$TINT_THEME_KISOK" || exit 1
+chmod 644 "$TINT_THEME_KISOK" || exit 1
+
 # autologin current user
 CFG_LIGHTDM="/etc/lightdm/lightdm.conf"
 if ! [ -f "$CFG_LIGHTDM" ]; then
@@ -47,12 +53,4 @@ sed -i "/autologin-user=/c\autologin-user=$TARGET_USER" "$CFG_LIGHTDM" ||
 sed -i "/autologin-user-timeout=/c\autologin-user-timeout=0" "$CFG_LIGHTDM" ||
     exit 1
 
-# restart desktop
-# shellcheck disable=SC2009
-if ps a | grep -v grep | grep -q Xorg; then
-    service lightdm stop || exit 1
-    sleep 1 # otherwise framebuffer might not be cleared
-    service lightdm start || exit 1
-else
-    echo "WARNING: There is no Xorg session currently running. Try reboot."
-fi
+echo "please restart lightdm"

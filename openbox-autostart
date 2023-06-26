@@ -28,6 +28,9 @@ if ! [ -f "$BG_IMAGE" ]; then
 fi
 feh --bg-scale "$BG_IMAGE"
 
+# start task panel
+tint2 &
+
 # enable auto hide mouse
 unclutter &
 

@@ -21,22 +21,19 @@ TARGET="$1"
 ACTION="$2"
 
 if [ "$TARGET" = "close-all" ]; then
-    ACTION="close-all"
+    ACTION="$TARGET"
+fi
+if [ "$TARGET" = "hide-vms" ]; then
+    ACTION="$TARGET"
+fi
+if [ "$TARGET" = "hide-all" ]; then
+    ACTION="$TARGET"
 fi
 
 error() {
     echo "ERROR: $1" | tee -a "$LOG"
     exit 1
 }
-
-# default settings
-if [ -z "$TARGET" ]; then
-    if [ -d /var/www/html ]; then
-        TARGET="http://localhost/"
-    else
-        TARGET="http://example.com/"
-    fi
-fi
 
 DATE=$(date)
 echo "TARGET: $TARGET ACTION: $ACTION - $DATE" >>"$LOG"
@@ -129,26 +126,111 @@ open_vm() {
 
     # open VM in fullscreen
     abort_if_running virt-viewer "$TARGET"
-    nohup virt-viewer -v "$TARGET" --reconnect --wait --kiosk 1>>"$LOG" 2>&1 &
+    nohup virt-viewer -v "$TARGET" --reconnect --wait --kiosk \
+        1>>"$LOG" 2>>"$LOG_ERR" &
+#    nohup sleep 2 && xdotool search --name "$TARGET" set_window \
+#        --name "$TARGET" 1>>"$LOG" 2>>"$LOG_ERR" &
+#    nohup sleep 6 && xdotool search --name "$TARGET" set_window \
+#        --name "$TARGET" 1>>"$LOG" 2>>"$LOG_ERR" &
 }
 
-close_process() {
+pid_to_ident() {
+    local WINDOWS
+    local LINE
+    local CURRENT_WINDOW_ID
+    local CURRENT_WINDOW_PID
+
+    # convert PID to wmctrl window identifier
+    PID="$1"
+
+    # get a list of all windows
+    WINDOWS=$(mktemp)
+    wmctrl -p -l 2>/dev/null >"$WINDOWS"
+
+    while IFS="" read -r i || [ -n "$i" ]; do
+        LINE=$(printf '%s\n' "$i")
+        CURRENT_WINDOW_ID=$(echo "$LINE" | awk '{print $1}')
+        CURRENT_WINDOW_PID=$(echo "$LINE" | awk '{print $3}')
+        # if the window exists
+        if [ "$CURRENT_WINDOW_PID" = "$PID" ]; then
+            echo "$CURRENT_WINDOW_ID"
+        fi
+    done <"$WINDOWS"
+
+    rm -f "$WINDOWS"
+}
+
+hide_process() {
+    local PROCESS_ID
+    local CMD_LINE
+    local WINDOW_ID
+    local i
+    local STR_A
+    local STR_B
+    STR_A="$1"
+    STR_B="$2"
+    if [ -z "$STR_A" ]; then
+        error "hide_process: STR_A is unset"
+    fi
+    if [ -z "$STR_B" ]; then
+        STR_B="$STR_A"
+    fi
+
+#    if [ "$STR_A" = "virt-viewer" ]; then
+#        xdotool search --name "$TARGET" set_window --name "$TARGET" \
+#            1>>"$LOG" 2>>"$LOG_ERR"
+#    fi
+
     # shellcheck disable=SC2009
-    PROCESS_ID="$(ps ax | grep -iF "$1" | grep -iF "$2" | awk '{print $1}')"
+    PROCESS_ID=$(ps ax | grep -v grep | grep -iF "$STR_A" |
+        grep -iF "$STR_B" | sed '/^ *$/d' | awk '{print $1}')
     if [ -n "$PROCESS_ID" ]; then
         for i in $PROCESS_ID; do
             CMD_LINE=$(ps -p "$i" -o args --no-headers)
-            kill "$i" 2>/dev/null && echo "> TERM process: $CMD_LINE" |
-                tee "$LOG"
+            # find current window identifier
+            WINDOW_ID=$(pid_to_ident "$i" | head -n1)
+            # hide window by identifier
+            if [ -n "$WINDOW_ID" ]; then
+                echo "Hide window: $CMD_LINE" | tee -a "$LOG"
+                wmctrl -i -r "$WINDOW_ID" -b add,hidden ||
+                    error "Hide window: ID:$WINDOW_ID CMD:$CMD_LINE"
+            fi
+        done
+    fi
+}
+
+close_process() {
+    local PROCESS_ID
+    local CMD_LINE
+    local i
+    local STR_A
+    local STR_B
+    STR_A="$1"
+    STR_B="$2"
+    if [ -z "$STR_A" ]; then
+        error "close_process: STR_A is unset"
+    fi
+    if [ -z "$STR_B" ]; then
+        STR_B="$STR_A"
+    fi
+
+    # shellcheck disable=SC2009
+    PROCESS_ID=$(ps ax | grep -v grep | grep -iF "$STR_A" |
+        grep -iF "$STR_B" | sed '/^ *$/d' | awk '{print $1}')
+    if [ -n "$PROCESS_ID" ]; then
+        for i in $PROCESS_ID; do
+            CMD_LINE=$(ps -p "$i" -o args --no-headers)
+            echo "Kill process: $CMD_LINE" | tee -a "$LOG"
+            kill "$i" 2>/dev/null
         done
     fi
 }
 
 case $ACTION in
 close-all)
-    close_process simple-kiosk "http"
-    close_process chromium ""
-    close_process virt-viewer ""
+    close_process simple-kiosk http
+    close_process chromium
+    close_process virt-viewer
     exit 0
     ;;
 close)
@@ -162,6 +244,26 @@ close)
     else
         close_process virt-viewer "$TARGET"
     fi
+    ;;
+hide)
+    echo "Hide $TARGET"
+    if echo "$TARGET" | grep -q '^http'; then
+        if command -v simple-kiosk 1>/dev/null; then
+            hide_process simple-kiosk "$TARGET"
+        else
+            hide_process chromium "$TARGET"
+        fi
+    else
+        hide_process virt-viewer "$TARGET"
+    fi
+    ;;
+hide-vms)
+    hide_process virt-viewer
+    ;;
+hide-all)
+    hide_process virt-viewer
+    hide_process simple-kiosk
+    hide_process chromium
     ;;
 *)
     # open target
