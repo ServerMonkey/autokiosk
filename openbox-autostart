@@ -32,7 +32,7 @@ feh --bg-scale "$BG_IMAGE"
 tint2 &
 
 # enable auto hide mouse
-unclutter &
+unclutter -idle 10 -root &
 
 # user startup script
 sh "$HOME/.autokiosk_logon"
