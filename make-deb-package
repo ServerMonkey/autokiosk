@@ -22,6 +22,7 @@ MAN_PAGE=1
 FILE_MAN="$NAME.$MAN_PAGE"
 PATH_BASE="./$RELEASES/$NAME-$VERSION"
 PATH_INSTALL="$PATH_BASE/usr/local"
+PATH_BASH_COMP="$PATH_BASE/usr/share/bash-completion/completions"
 PATH_BIN="$PATH_INSTALL/bin"
 PATH_SHARE="$PATH_INSTALL/share/$NAME"
 PATH_ETC="$PATH_BASE/etc"
@@ -34,12 +35,13 @@ rm -rf "$PATH_BASE"
 
 # copy relevant files from source to release
 echo "Copying relevant source files"
-mkdir -p "$PATH_SHARE" "$PATH_BIN" "$PATH_MAN" "$PATH_ETC"
+mkdir -p "$PATH_SHARE" "$PATH_BIN" "$PATH_MAN" "$PATH_ETC" "$PATH_BASH_COMP"
 cp -t "$PATH_SHARE" "README.md" "copyright" "openbox-autostart" \
     "openbox-rc.xml" "autokiosk.png" "tint2rc" || exit 1
 chmod 0755 "$NAME" "autokiosk-init" "autokiosk_keys"
 cp -t "$PATH_BIN" "$NAME" "autokiosk-init" || exit 1
 cp -t "$PATH_ETC" "autokiosk_keys" || exit 1
+cp -t "$PATH_BASH_COMP" "bash_completion/autokiosk" || exit 1
 
 # build man page
 ronn -r <"$README" | gzip -9n >"$PATH_MAN/$FILE_MAN" || exit 1

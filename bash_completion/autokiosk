@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+complete -W "-h --help close-all close hide hide-vms hide-all https:// http:// https://localhost http://localhost" autokiosk
