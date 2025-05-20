@@ -6,7 +6,7 @@
 hsetroot -solid "#ffffff" &
 
 SYSTEM_IS_VM=$(hostnamectl status | grep Virt)
-if [ -n "${SYSTEM_IS_VM}" ]; then
+if [ -n "$SYSTEM_IS_VM" ]; then
     # change resolution if this is a VM
     xrandr -s 1280x720
 else
@@ -35,4 +35,4 @@ tint2 &
 unclutter -idle 10 -root &
 
 # user startup script
-sh "$HOME/.autokiosk_logon"
+sh "$HOME/.autokiosk_logon" || true

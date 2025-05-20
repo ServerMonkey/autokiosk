@@ -21,7 +21,7 @@ TARGET="DEBIAN"
 MAN_PAGE=1
 FILE_MAN="$NAME.$MAN_PAGE"
 PATH_BASE="./$RELEASES/$NAME-$VERSION"
-PATH_INSTALL="$PATH_BASE/usr/local"
+PATH_INSTALL="$PATH_BASE/usr"
 PATH_BASH_COMP="$PATH_BASE/usr/share/bash-completion/completions"
 PATH_BIN="$PATH_INSTALL/bin"
 PATH_SHARE="$PATH_INSTALL/share/$NAME"
@@ -68,8 +68,7 @@ Depends: xorg,
  glogg,
  tint2,
  wmctrl,
- xdotool,
- simple-kiosk
+ xdotool
 Maintainer: Bodo Endres <dev@muspekaren.se>
 Description: $DESCRIPTION
 " >"$PATH_TARGET/control"

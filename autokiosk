@@ -1,10 +1,12 @@
 #!/bin/sh
 # shellcheck disable=SC2039
 
+set -e
+
 # help
 if [ -z "$1" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     man autokiosk.1 || ronn -r <README.md | man -l -
-    exit
+    exit 0
 fi
 
 # must run as normal user
@@ -13,75 +15,141 @@ if [ "$(id -u)" = 0 ]; then
     exit 1
 fi
 
-LOG="$HOME/.autokiosk.log"
-LOG_ERR="$HOME/.autokiosk_error.log"
+readonly BASE_DIR="$HOME/.local/share/autokiosk"
+readonly LOG="$BASE_DIR/autokiosk.log"
+readonly LOG_ERR="$BASE_DIR/autokiosk_error.log"
+mkdir -p "$BASE_DIR"
 rm -f "$LOG" "$LOG_ERR"
 
-TARGET="$1"
-ACTION="$2"
+if echo "$1" | grep -qF '--' -; then
+    readonly OPTION="$1"
+    readonly URI_TARGET="$2"
+elif echo "$2" | grep -qF '--' -; then
+    readonly OPTION="$2"
+    readonly URI_TARGET="$1"
+else
+    readonly URI_TARGET="$1"
+    readonly OPTION=""
+fi
 
-if [ "$TARGET" = "close-all" ]; then
-    ACTION="$TARGET"
-fi
-if [ "$TARGET" = "hide-vms" ]; then
-    ACTION="$TARGET"
-fi
-if [ "$TARGET" = "hide-all" ]; then
-    ACTION="$TARGET"
-fi
+case $OPTION in
+--close-all | --hide-*)
+    readonly ACTION="${OPTION#--}"
+    ;;
+*)
+    if echo "$URI_TARGET" | grep -qF ':' 2>/dev/null; then
+        readonly URI="$(echo "$URI_TARGET" | cut -d':' -f1 |
+            tr -d "\t\n\r")"
+        [ -z "$URI" ] && error "Missing URI"
+        readonly TARGET="$(echo "$URI_TARGET" | cut -d':' -f2- |
+            tr -d "\t\n\r")"
+        [ -z "$TARGET" ] && error "Missing TARGET"
+    fi
+
+    if [ -z "$OPTION" ]; then
+        readonly ACTION="open"
+    else
+        readonly ACTION="${OPTION#--}"
+    fi
+    ;;
+esac
 
 error() {
-    echo "ERROR: $1" | tee -a "$LOG"
+    echo "Error: $1" >&2
+    echo "Error: $1" >>"$LOG"
     exit 1
 }
 
-DATE=$(date)
-echo "TARGET: $TARGET ACTION: $ACTION - $DATE" >>"$LOG"
+require() {
+    [ -x "$(command -v "$1" 2>/dev/null)" ] || error "Command not found: $1"
+}
 
-# default display fallback
-if [ -z "$DISPLAY" ]; then
-    # required if run from terminal
-    export DISPLAY=:0 1>>"$LOG" 2>>"$LOG_ERR"
-    # required for systemd to run as service
-    echo "Running autokiosk in none-interactive mode"
-    xhost +local: 1>>"$LOG" 2>>"$LOG_ERR"
-fi
+get_resolution() {
+    local RES
 
-# wait for an openbox session
-if ! w | grep -qF openbox; then
-    echo "no openbox session found"
-fi
+    # get resolution of first monitor
+    RES=$(xrandr | grep -F '*' | head -n1 | awk '{print $1}')
+    [ -z "$RES" ] && error "Failed to find desktop resolution"
+    echo "$RES"
+}
+
+get_keyboard_layout() {
+    local KEY_LAYOUT
+    local KEY_LAYOUT_FINAL
+    local KEYMAPS_DIR
+
+    KEY_LAYOUT=$(grep "XKBLAYOUT=" /etc/default/keyboard |
+        sed 's/XKBLAYOUT=//' 2>/dev/null | tr -d \")
+    [ -z "$KEY_LAYOUT" ] && error "Failed to get keyboard layout"
+
+    # translate keyboard layout
+    case $KEY_LAYOUT in
+    se)
+        KEY_LAYOUT_FINAL=sv
+        ;;
+    us)
+        KEY_LAYOUT_FINAL=en-us
+        ;;
+    gb)
+        KEY_LAYOUT_FINAL=en-gb
+        ;;
+    *)
+        KEY_LAYOUT_FINAL="$KEY_LAYOUT"
+        ;;
+    esac
+
+    # verify keyboard layout exists in /usr/share/rdesktop/keymaps/
+    KEYMAPS_DIR="/usr/share/rdesktop/keymaps/"
+    if [ ! -f "$KEYMAPS_DIR/$KEY_LAYOUT_FINAL" ]; then
+        error "Keyboard layout '$KEY_LAYOUT_FINAL' not found in $KEYMAPS_DIR"
+    fi
+
+    echo "$KEY_LAYOUT_FINAL"
+}
 
 abort_if_running() {
+    local RUNNING_INSTANCES
+
     # shellcheck disable=SC2009
     RUNNING_INSTANCES=$(ps -eo args | grep -v grep |
-        grep -F "$1" | grep -F "$2")
+        grep -F "$1" | grep -F "$2" || true)
     if [ -n "$RUNNING_INSTANCES" ]; then
-        echo "Already running: $1 $2"
-        exit 1
+        echo "Already running: $1 $2" | tee -a "$LOG"
+        exit 0
+    fi
+}
+
+simple_kiosk_or_chromium() {
+    if command -v simple-kiosk 1>/dev/null; then
+        echo "simple-kiosk"
+    else
+        echo "chromium"
     fi
 }
 
 open_http() {
-    echo "Open URL $TARGET"
+    local WEBSITE="$1"
+    echo "Open URL $WEBSITE" | tee -a "$LOG"
+
+    local WEB_RES
+    local RES_PARSED
 
     # default kiosk application
     if command -v simple-kiosk 1>/dev/null; then
-        abort_if_running simple-kiosk "$TARGET"
-        nohup simple-kiosk "$TARGET" >/dev/null 2>&1 &
+        abort_if_running simple-kiosk "$WEBSITE"
+        nohup simple-kiosk "$WEBSITE" >/dev/null 2>&1 &
     # Chromium fallback
     # only use as last resort,
     # Chromium can be unstable on ARM and has hardcoded keyboard controls
     elif command -v chromium 1>/dev/null; then
         # find desktop resolution of first monitor
         # shellcheck disable=SC2063
-        RES=$(xrandr | grep '*' | head -n1 | awk '{print $1}' | tr 'x' ',')
-        if [ -z "$RES" ]; then
-            error "Failed to find desktop resolution"
-        fi
-        abort_if_running chromium "$TARGET"
-        nohup chromium "$TARGET" \
-            --window-size="$RES" \
+        WEB_RES=$(get_resolution)
+        echo "WEB_RES $WEB_RES" >>"$LOG"
+        RES_PARSED=$(echo "$WEB_RES" | tr 'x' ',')
+        abort_if_running chromium "$WEBSITE"
+        nohup chromium "$WEBSITE" \
+            --window-size="$RES_PARSED" \
             --start-fullscreen \
             --kiosk \
             --incognito \
@@ -99,39 +167,173 @@ open_http() {
     fi
 }
 
-open_vm() {
-    echo "Open VM $TARGET"
+open_rdp() {
+    local RDP_HOST="$1"
+    echo "Open Remote Desktop to $RDP_HOST via RDP" | tee -a "$LOG"
 
-    if [ -z "$(command -v virt-viewer)" ]; then
-        error "Failed to find virt-viewer"
+    local RES_DEFAULT
+    local KEYS_DEFAULT
+
+    require rdesktop
+    require yes
+
+    RES_DEFAULT=$(get_resolution)
+    KEYS_DEFAULT=$(get_keyboard_layout)
+
+    [ -z "$AUTOKIOSK_RDP_KEYS" ] && AUTOKIOSK_RDP_KEYS="$KEYS_DEFAULT"
+    [ -z "$AUTOKIOSK_RDP_RES" ] && AUTOKIOSK_RDP_RES="$RES_DEFAULT"
+    [ -z "$AUTOKIOSK_RDP_PORT" ] && AUTOKIOSK_RDP_PORT=3389
+
+    # shellcheck disable=SC2129
+    echo "AUTOKIOSK_RDP_KEYS $AUTOKIOSK_RDP_KEYS" >>"$LOG"
+    echo "AUTOKIOSK_RDP_RES $AUTOKIOSK_RDP_RES" >>"$LOG"
+    echo "AUTOKIOSK_RDP_PORT $AUTOKIOSK_RDP_PORT" >>"$LOG"
+    echo "AUTOKIOSK_RDP_USER $AUTOKIOSK_RDP_USER" >>"$LOG"
+
+    abort_if_running rdesktop "$RDP_HOST"
+
+    if [ -z "$AUTOKIOSK_RDP_USER" ]; then
+        echo "Using no authentication for RDP connection" >>"$LOG"
+        nohup yes yes 2>/dev/null | rdesktop \
+            "$RDP_HOST":"$AUTOKIOSK_RDP_PORT" \
+            -k "$AUTOKIOSK_RDP_KEYS" \
+            -g "$AUTOKIOSK_RDP_RES" \
+            -a 32 \
+            -f \
+            -v \
+            2>>"$LOG_ERR" 1>>"$LOG" &
+    else
+        [ -z "$AUTOKIOSK_RDP_PASS" ] && error "Missing AUTOKIOSK_RDP_PASS"
+        echo "Using password for RDP connection" >>"$LOG"
+        nohup yes yes 2>/dev/null | rdesktop \
+            "$RDP_HOST":"$AUTOKIOSK_RDP_PORT" \
+            -u "$AUTOKIOSK_RDP_USER" \
+            -p "$AUTOKIOSK_RDP_PASS" \
+            -k "$AUTOKIOSK_RDP_KEYS" \
+            -g "$AUTOKIOSK_RDP_RES" \
+            -a 32 \
+            -f \
+            -v \
+            2>>"$LOG_ERR" 1>>"$LOG" &
     fi
+
+    # wait for connection to be established
+    local COUNTER=10
+    local FAIL="RDP connection failed:"
+    for i in $(seq 1 "$COUNTER"); do
+        sleep 1
+
+        if grep -q 'Connection successful' "$LOG"; then
+            if grep -q 'Established dynamic virtual channel' "$LOG"; then
+                break
+            elif [ "$i" -eq "$COUNTER" ]; then
+                close_process rdesktop "$RDP_HOST"
+                error "$FAIL Connected, but wrong authentication or password"
+            fi
+        fi
+
+        if grep -q 'Name or service not known' "$LOG_ERR"; then
+            error "$FAIL Name or service not known, check hostname, DNS or IP"
+        elif grep -q 'unable to connect' "$LOG_ERR"; then
+            error "$FAIL Unable to connect, check RDP server, port or fw"
+        fi
+
+        [ "$i" -eq "$COUNTER" ] && error "$FAIL Timeout, see $LOG_ERR"
+    done
+}
+
+open_vnc() {
+    local VNC_HOST="$1"
+    echo "Open Remote Desktop to $VNC_HOST via VNC" | tee -a "$LOG"
+
+    require xtightvncviewer
+    require xrdb
+
+    [ -z "$AUTOKIOSK_VNC_PORT" ] && AUTOKIOSK_VNC_PORT=5900
+
+    echo "AUTOKIOSK_VNC_PORT $AUTOKIOSK_VNC_PORT" >>"$LOG"
+
+    abort_if_running xtightvncviewer "$VNC_HOST"
+
+    # bugfix: force grab keyboard
+    echo "*grabKeyboard: true" | xrdb -merge
+
+    if [ -z "$AUTOKIOSK_VNC_PASS" ]; then
+        echo "Using no authentication for VNC connection" >>"$LOG"
+        nohup xtightvncviewer \
+            -fullscreen -depth 32 -nojpeg \
+            "$VNC_HOST":"$AUTOKIOSK_VNC_PORT" \
+            2>>"$LOG_ERR" 1>>"$LOG" &
+    else
+        echo "Using password for VNC connection" >>"$LOG"
+        nohup echo "$AUTOKIOSK_VNC_PASS" 2>/dev/null | xtightvncviewer \
+            -fullscreen -depth 32 -nojpeg -autopass \
+            "$VNC_HOST":"$AUTOKIOSK_VNC_PORT" \
+            2>>"$LOG_ERR" 1>>"$LOG" &
+    fi
+
+    # wait for connection to be established
+    local COUNTER=10
+    local FAIL="VNC connection failed:"
+    for i in $(seq 1 "$COUNTER"); do
+        sleep 1
+
+        # bugfix: need to parse the error log for success
+        if grep -q 'Authentication successful' "$LOG_ERR"; then
+            break
+        fi
+
+        if grep -q 'authentication rejected' "$LOG_ERR"; then
+            error "$FAIL Wrong authentication or password"
+        elif grep -q 'server closed connection' "$LOG_ERR"; then
+            error "$FAIL Server closed connection"
+        elif grep -q 'Couldn'\''t convert' "$LOG_ERR"; then
+            error "$FAIL Host not found, check hostname, DNS or IP"
+        elif grep -q 'Connection refused' "$LOG_ERR"; then
+            error "$FAIL Connection refused, check VNC server, port or fw"
+        fi
+
+        [ "$i" -eq "$COUNTER" ] && error "$FAIL Timeout, see $LOG_ERR"
+    done
+}
+
+open_vm() {
+    local VM_NAME="$1"
+    echo "Open VM $VM_NAME" | tee -a "$LOG"
+
+    require virt-viewer
 
     # set default URI
-    if [ -z "$LIBVIRT_DEFAULT_URI" ]; then
+    [ -z "$LIBVIRT_DEFAULT_URI" ] &&
         export LIBVIRT_DEFAULT_URI="qemu:///system"
-    fi
-
-    # verify
-    if [ -z "$LIBVIRT_DEFAULT_URI" ]; then
-        error "LIBVIRT_DEFAULT_URI is unset"
-    fi
-    if [ -z "$DISPLAY" ]; then
-        error "DISPLAY is unset"
-    fi
 
     # shellcheck disable=SC2129
     echo "LIBVIRT_DEFAULT_URI $LIBVIRT_DEFAULT_URI" >>"$LOG"
-    echo "DISPLAY $DISPLAY" >>"$LOG"
-    echo "HOME $HOME" >>"$LOG"
 
-    # open VM in fullscreen
-    abort_if_running virt-viewer "$TARGET"
-    nohup virt-viewer -v "$TARGET" --reconnect --wait --kiosk \
+    abort_if_running virt-viewer "$VM_NAME"
+
+    nohup virt-viewer -v "$VM_NAME" --reconnect --wait --kiosk \
         1>>"$LOG" 2>>"$LOG_ERR" &
-#    nohup sleep 2 && xdotool search --name "$TARGET" set_window \
-#        --name "$TARGET" 1>>"$LOG" 2>>"$LOG_ERR" &
-#    nohup sleep 6 && xdotool search --name "$TARGET" set_window \
-#        --name "$TARGET" 1>>"$LOG" 2>>"$LOG_ERR" &
+
+    # wait for connection to be established
+    local COUNTER=10
+    local FAIL="VM connection failed:"
+    for i in $(seq 1 "$COUNTER"); do
+        sleep 1
+
+        if grep -q 'has not activated its display yet' "$LOG"; then
+            if grep -q 'connection to display' "$LOG"; then
+                break
+            elif [ "$i" -eq "$COUNTER" ]; then
+                close_process virt-viewer "$URI_TARGET"
+                error "$FAIL no active display found"
+            fi
+        elif grep -q 'connection to display' "$LOG"; then
+            break
+        fi
+
+        [ "$i" -eq "$COUNTER" ] && error "$FAIL Timeout, see $LOG_ERR"
+    done
 }
 
 pid_to_ident() {
@@ -176,11 +378,6 @@ hide_process() {
         STR_B="$STR_A"
     fi
 
-#    if [ "$STR_A" = "virt-viewer" ]; then
-#        xdotool search --name "$TARGET" set_window --name "$TARGET" \
-#            1>>"$LOG" 2>>"$LOG_ERR"
-#    fi
-
     # shellcheck disable=SC2009
     PROCESS_ID=$(ps ax | grep -v grep | grep -iF "$STR_A" |
         grep -iF "$STR_B" | sed '/^ *$/d' | awk '{print $1}')
@@ -220,57 +417,116 @@ close_process() {
     if [ -n "$PROCESS_ID" ]; then
         for i in $PROCESS_ID; do
             CMD_LINE=$(ps -p "$i" -o args --no-headers)
-            echo "Kill process: $CMD_LINE" | tee -a "$LOG"
+            echo "Close window: $STR_A $STR_B"
+            echo "Kill process: $CMD_LINE" >>"$LOG"
             kill "$i" 2>/dev/null
         done
     fi
 }
 
+# MAIN #######################################################################
+
+DATE=$(date)
+case $ACTION in
+close-all | hide-*)
+    echo "Action: $ACTION - $DATE" >>"$LOG"
+    ;;
+*)
+    echo "Target: $URI_TARGET Action: $ACTION - $DATE" >>"$LOG"
+    ;;
+esac
+
+# default display fallback
+if [ -z "$DISPLAY" ]; then
+    # required if run from terminal
+    export DISPLAY=:0 1>>"$LOG" 2>>"$LOG_ERR"
+    # required for systemd to run as service
+    echo "Running autokiosk in none-interactive mode" >>"$LOG"
+    if [ -n "$(command -v xhost)" ]; then
+        xhost +local: 1>>"$LOG" 2>>"$LOG_ERR" || true
+    fi
+fi
+echo "DISPLAY $DISPLAY" >>"$LOG"
+
+# info that no openbox session is running
+if ! w | grep -qF openbox; then
+    echo "no openbox session found" | tee -a "$LOG"
+fi
+
 case $ACTION in
 close-all)
-    close_process simple-kiosk http
-    close_process chromium
     close_process virt-viewer
-    exit 0
+    close_process "$(simple_kiosk_or_chromium)"
+    close_process rdesktop
+    close_process xtightvncviewer
     ;;
 close)
-    echo "Stop $TARGET"
-    if echo "$TARGET" | grep -q '^http'; then
-        if command -v simple-kiosk 1>/dev/null; then
-            close_process simple-kiosk "$TARGET"
-        else
-            close_process chromium "$TARGET"
-        fi
-    else
-        close_process virt-viewer "$TARGET"
-    fi
+    case $URI in
+    http*)
+        close_process "$(simple_kiosk_or_chromium)" "$URI_TARGET"
+        ;;
+    rdp)
+        close_process rdesktop "$TARGET"
+        ;;
+    vnc)
+        close_process xtightvncviewer "$TARGET"
+        ;;
+    *)
+        close_process virt-viewer "$URI_TARGET"
+        ;;
+    esac
     ;;
 hide)
-    echo "Hide $TARGET"
-    if echo "$TARGET" | grep -q '^http'; then
-        if command -v simple-kiosk 1>/dev/null; then
-            hide_process simple-kiosk "$TARGET"
-        else
-            hide_process chromium "$TARGET"
-        fi
-    else
-        hide_process virt-viewer "$TARGET"
-    fi
+    case $URI in
+    http*)
+        hide_process "$(simple_kiosk_or_chromium)" "$URI_TARGET"
+        ;;
+    rdp)
+        hide_process rdesktop "$TARGET"
+        ;;
+    vnc)
+        hide_process xtightvncviewer "$TARGET"
+        ;;
+    *)
+        hide_process virt-viewer "$URI_TARGET"
+        ;;
+    esac
+    ;;
+hide-web)
+    hide_process "$(simple_kiosk_or_chromium)"
+    ;;
+hide-rdp)
+    hide_process rdesktop
+    ;;
+hide-vnc)
+    hide_process xtightvncviewer
     ;;
 hide-vms)
     hide_process virt-viewer
     ;;
 hide-all)
     hide_process virt-viewer
-    hide_process simple-kiosk
-    hide_process chromium
+    hide_process "$(simple_kiosk_or_chromium)"
+    hide_process rdesktop
+    hide_process xtightvncviewer
+    ;;
+open)
+    case $URI in
+    http*)
+        open_http "$URI_TARGET"
+        ;;
+    rdp)
+        open_rdp "$TARGET"
+        ;;
+    vnc)
+        open_vnc "$TARGET"
+        ;;
+    *)
+        open_vm "$URI_TARGET"
+        ;;
+    esac
     ;;
 *)
-    # open target
-    if echo "$TARGET" | grep -q '^http'; then
-        open_http
-    else
-        open_vm
-    fi
+    error "Unknown action: $ACTION"
     ;;
 esac

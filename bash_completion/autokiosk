@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-complete -W "-h --help close-all close hide hide-vms hide-all https:// http:// https://localhost http://localhost" autokiosk
+complete -W "-h --help --close-all --close --hide --hide-web --hide-rdp --hide-vnc --hide-vms --hide-all vnc: rdp: https:// http:// https://localhost http://localhost" autokiosk

@@ -1,56 +1,52 @@
 #!/bin/sh
 #info: Configure openbox for kiosk mode, autologin user
 
-# must run as root
-if [ "$(id -u)" -ne 0 ]; then
-    echo 'This script must be run as root!' >&2
+set -e
+
+error() {
+    echo "Error: $1" >&2
     exit 1
-fi
+}
+
+# must run as root
+[ "$(id -u)" -ne 0 ] && error 'This script must be run as root!'
 
 TARGET_USER="$1"
-
-if [ -z "$TARGET_USER" ]; then
-    echo "Missing variable TARGET_USER"
-    exit 1
-fi
+[ -z "$TARGET_USER" ] && error "Missing variable TARGET_USER"
 
 # variables
 DIR_CFG="/etc/xdg/openbox"
 AUTOSTART="$DIR_CFG/autostart"
-AUTOSTART_KIOSK="/usr/local/share/autokiosk/openbox-autostart"
+AUTOSTART_KIOSK="/usr/share/autokiosk/openbox-autostart"
 RC="$DIR_CFG/rc.xml"
-RC_KIOSK="/usr/local/share/autokiosk/openbox-rc.xml"
-TINT_THEME="/usr/local/share/autokiosk/tint2rc"
+RC_KIOSK="/usr/share/autokiosk/openbox-rc.xml"
+TINT_THEME="/usr/share/autokiosk/tint2rc"
 TINT_THEME_KISOK="/etc/xdg/tint2/tint2rc"
 
-# verify
-if ! [ -d "$DIR_CFG" ]; then
-    echo "ERROR: openbox does not seem to be installed"
-    exit 1
-fi
+# verify openbox
+[ -d "$DIR_CFG" ] || error "openbox does not seem to be installed"
 
 # custom autostart file
-cp -f "$AUTOSTART_KIOSK" "$AUTOSTART" || exit 1
-chmod 755 "$AUTOSTART" || exit 1
+cp -f "$AUTOSTART_KIOSK" "$AUTOSTART"
+chmod 755 "$AUTOSTART"
 
 # custom desktop settings
-cp -f "$RC_KIOSK" "$RC" || exit 1
-chmod 644 "$RC" || exit 1
+cp -f "$RC_KIOSK" "$RC"
+chmod 644 "$RC"
 
 # custom tint2 panel theme
-cp -f "$TINT_THEME" "$TINT_THEME_KISOK" || exit 1
-chmod 644 "$TINT_THEME_KISOK" || exit 1
+cp -f "$TINT_THEME" "$TINT_THEME_KISOK"
+chmod 644 "$TINT_THEME_KISOK"
 
 # autologin current user
 CFG_LIGHTDM="/etc/lightdm/lightdm.conf"
 if ! [ -f "$CFG_LIGHTDM" ]; then
-    echo "ERROR: lightdm does not seem to be installed"
-    exit 1
+    error "lightdm does not seem to be installed"
 fi
 # autologin user
 sed -i "/autologin-user=/c\autologin-user=$TARGET_USER" "$CFG_LIGHTDM" ||
-    exit 1
+    error "Failed to set autologin user"
 sed -i "/autologin-user-timeout=/c\autologin-user-timeout=0" "$CFG_LIGHTDM" ||
-    exit 1
+    error "Failed to set autologin timeout"
 
 echo "please restart lightdm"
